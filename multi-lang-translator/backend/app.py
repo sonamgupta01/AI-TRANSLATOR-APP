@@ -130,10 +130,20 @@ def adjust_grammatical_gender(text, target_lang, speaker_gender):
 def translate_text(text, source_lang, target_lang, speaker_gender='female'):
     """Translate text with gender context"""
     try:
-        # Try Google Translate with gender context first (BEST OPTION)
-        return translate_with_google_gender(text, source_lang, target_lang, speaker_gender)
-    except:
-        # Fallback to M2M100 only if Google fails
+        # Try Google Translate first (BEST OPTION)
+        translator = Translator()
+        result = translator.translate(text, src=source_lang, dest=target_lang)
+        translated = result.text
+        
+        # Apply gender adjustments only for specific languages
+        if target_lang in ['hi', 'ur', 'ne', 'pa']:
+            translated = adjust_grammatical_gender(translated, target_lang, speaker_gender)
+        
+        return translated
+        
+    except Exception as e:
+        print(f"❌ Google Translate failed: {e}")
+        # Fallback to M2M100
         return translate_single_chunk(text, source_lang, target_lang, speaker_gender)
 
 def translate_single_chunk(text, source_lang, target_lang, speaker_gender='female'):
@@ -186,30 +196,42 @@ def translate_single_chunk(text, source_lang, target_lang, speaker_gender='femal
 async def generate_edge_tts(text, target_lang, gender):
     """Generate TTS using Microsoft Edge TTS with proper male/female voices"""
     try:
-        # FIXED Voice mapping for different languages and genders
+        print(f"🎯 Edge TTS called: lang={target_lang}, gender={gender}, text='{text[:30]}...'")
+        
+        # COMPREHENSIVE Voice mapping for ALL languages
         voice_map = {
-            'hi': {
-                'male': 'hi-IN-MadhurNeural',
-                'female': 'hi-IN-SwaraNeural'
-            },
-            'en': {
-                'male': 'en-US-BrianNeural',    # FIXED: Actual male voice
-                'female': 'en-US-JennyNeural'
-            },
-            'es': {
-                'male': 'es-ES-AlvaroNeural',
-                'female': 'es-ES-ElviraNeural'
-            },
-            'fr': {
-                'male': 'fr-FR-HenriNeural',
-                'female': 'fr-FR-DeniseNeural'
-            }
+            'en': {'male': 'en-US-BrianNeural', 'female': 'en-US-JennyNeural'},
+            'hi': {'male': 'hi-IN-MadhurNeural', 'female': 'hi-IN-SwaraNeural'},
+            'bn': {'male': 'bn-BD-PradeepNeural', 'female': 'bn-BD-NabanitaNeural'},
+            'es': {'male': 'es-ES-AlvaroNeural', 'female': 'es-ES-ElviraNeural'},
+            'fr': {'male': 'fr-FR-HenriNeural', 'female': 'fr-FR-DeniseNeural'},
+            'de': {'male': 'de-DE-ConradNeural', 'female': 'de-DE-KatjaNeural'},
+            'it': {'male': 'it-IT-DiegoNeural', 'female': 'it-IT-ElsaNeural'},
+            'pt': {'male': 'pt-BR-AntonioNeural', 'female': 'pt-BR-FranciscaNeural'},
+            'ru': {'male': 'ru-RU-DmitryNeural', 'female': 'ru-RU-SvetlanaNeural'},
+            'ja': {'male': 'ja-JP-KeitaNeural', 'female': 'ja-JP-NanamiNeural'},
+            'ko': {'male': 'ko-KR-InJoonNeural', 'female': 'ko-KR-SunHiNeural'},
+            'zh': {'male': 'zh-CN-YunxiNeural', 'female': 'zh-CN-XiaoxiaoNeural'},
+            'ar': {'male': 'ar-SA-HamedNeural', 'female': 'ar-SA-ZariyahNeural'},
+            'tr': {'male': 'tr-TR-AhmetNeural', 'female': 'tr-TR-EmelNeural'},
+            'ur': {'male': 'ur-PK-AsadNeural', 'female': 'ur-PK-UzmaNeural'},
+            'ne': {'male': 'ne-NP-SagarNeural', 'female': 'ne-NP-HemkalaNeural'},
+            'pa': {'male': 'pa-IN-GaganNeural', 'female': 'pa-IN-HarpreetNeural'},
+            'gu': {'male': 'gu-IN-NiranjanNeural', 'female': 'gu-IN-DhwaniNeural'},
+            'mr': {'male': 'mr-IN-ManoharNeural', 'female': 'mr-IN-AarohiNeural'},
+            'ta': {'male': 'ta-IN-ValluvarNeural', 'female': 'ta-IN-PallaviNeural'},
+            'te': {'male': 'te-IN-MohanNeural', 'female': 'te-IN-ShrutiNeural'},
+            'ml': {'male': 'ml-IN-MidhunNeural', 'female': 'ml-IN-SobhanaNeural'},
+            'kn': {'male': 'kn-IN-GaganNeural', 'female': 'kn-IN-SapnaNeural'},
+            'pl': {'male': 'pl-PL-MarekNeural', 'female': 'pl-PL-ZofiaNeural'},
+            'nl': {'male': 'nl-NL-MaartenNeural', 'female': 'nl-NL-ColetteNeural'},
+            'sv': {'male': 'sv-SE-MattiasNeural', 'female': 'sv-SE-SofieNeural'}
         }
         
         # Get voice for language and gender
         voice = voice_map.get(target_lang, {}).get(gender, 'en-US-JennyNeural')
         
-        print(f"🎤 Using Edge TTS voice: {voice} for {gender}")
+        print(f"🎤 Using Edge TTS voice: {voice} for {target_lang}-{gender}")
         
         # Generate speech
         communicate = edge_tts.Communicate(text, voice)
@@ -220,44 +242,64 @@ async def generate_edge_tts(text, target_lang, gender):
             if chunk["type"] == "audio":
                 audio_data += chunk["data"]
         
+        if not audio_data:
+            print("❌ No audio data received from Edge TTS")
+            return None
+        
+        print(f"✅ Edge TTS success: {len(audio_data)} bytes for {target_lang}")
+        
         # Convert to base64
         audio_base64 = base64.b64encode(audio_data).decode('utf-8')
         return f"data:audio/mp3;base64,{audio_base64}"
         
     except Exception as e:
-        print(f"Edge TTS error: {e}")
+        print(f"❌ Edge TTS error for {target_lang}: {e}")
         return None
 
 def generate_tts_stream(text, target_lang, gender='female'):
-    """Generate TTS with Edge TTS for better male voices"""
+    """Generate TTS with proper error handling"""
     try:
-        # Try Edge TTS first
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(generate_edge_tts(text, target_lang, gender))
-        loop.close()
+        print(f"🔊 TTS Request: lang={target_lang}, gender={gender}, text='{text[:30]}...'")
         
-        if result:
-            return result
-        else:
-            # Fallback to gTTS
-            return generate_gtts_audio(text, target_lang, gender)
+        # Try Edge TTS first
+        try:
+            # Fix event loop issue
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            
+            result = loop.run_until_complete(generate_edge_tts(text, target_lang, gender))
+            
+            if result:
+                print(f"✅ Edge TTS SUCCESS for {target_lang}")
+                return result
+                
+        except Exception as e:
+            print(f"⚠️ Edge TTS failed: {e}")
+        
+        # Always fallback to gTTS
+        print(f"🔄 Using gTTS fallback for {target_lang}")
+        return generate_gtts_audio(text, target_lang, gender)
             
     except Exception as e:
-        print(f"TTS error: {e}")
-        return generate_gtts_audio(text, target_lang, gender)
+        print(f"❌ All TTS failed for {target_lang}: {e}")
+        return None
 
 def generate_gtts_audio(text, target_lang, gender):
-    """Generate TTS audio with better quality and proper male/female voices"""
+    """Generate TTS audio with gTTS - FIXED for all languages"""
     try:
-        # Enhanced TLD mapping with better male voice support
+        print(f"🎵 gTTS generating for {target_lang}: '{text[:30]}...'")
+        
+        # Enhanced TLD mapping for better voices
         tld_map = {
+            'en': {'male': 'com.au', 'female': 'co.uk'},
             'hi': {'male': 'co.in', 'female': 'co.in'},
-            'ne': {'male': 'com.np', 'female': 'com.np'},
             'bn': {'male': 'com.bd', 'female': 'com.bd'},
-            'en': {'male': 'com.au', 'female': 'co.uk'},  # Australian for male, UK for female
+            'ne': {'male': 'com.np', 'female': 'com.np'},
             'es': {'male': 'com.mx', 'female': 'es'},
-            'fr': {'male': 'ca', 'female': 'fr'},  # Canadian French for male
+            'fr': {'male': 'ca', 'female': 'fr'},
             'de': {'male': 'de', 'female': 'at'},
             'it': {'male': 'it', 'female': 'it'},
             'pt': {'male': 'com.br', 'female': 'pt'},
@@ -266,6 +308,7 @@ def generate_gtts_audio(text, target_lang, gender):
             'ko': {'male': 'co.kr', 'female': 'co.kr'},
             'zh': {'male': 'com.tw', 'female': 'com.hk'},
             'ar': {'male': 'com.sa', 'female': 'ae'},
+            'tr': {'male': 'com.tr', 'female': 'com.tr'},
             'ur': {'male': 'com.pk', 'female': 'com.pk'},
             'ta': {'male': 'co.in', 'female': 'co.in'},
             'te': {'male': 'co.in', 'female': 'co.in'},
@@ -274,21 +317,20 @@ def generate_gtts_audio(text, target_lang, gender):
             'kn': {'male': 'co.in', 'female': 'co.in'},
             'mr': {'male': 'co.in', 'female': 'co.in'},
             'pa': {'male': 'co.in', 'female': 'co.in'},
+            'pl': {'male': 'pl', 'female': 'pl'},
+            'nl': {'male': 'nl', 'female': 'nl'},
+            'sv': {'male': 'se', 'female': 'se'}
         }
         
         # Get appropriate TLD for gender
-        tld = 'com'  # default
-        if target_lang in tld_map:
-            tld = tld_map[target_lang].get(gender, 'com')
+        tld = tld_map.get(target_lang, {}).get(gender, 'com')
         
-        print(f"Generating TTS for: '{text}' in {target_lang} with {gender} voice (TLD: {tld})")
+        print(f"🎤 gTTS: {target_lang} with {gender} voice (TLD: {tld})")
         
-        # Try different approaches for male voice
+        # Create TTS with gender-specific settings
         if gender == 'male':
-            # For male voice, try slower speech which often sounds more masculine
             tts = gTTS(text=text, lang=target_lang, slow=True, tld=tld)
         else:
-            # For female voice, use normal speed
             tts = gTTS(text=text, lang=target_lang, slow=False, tld=tld)
         
         # Save to memory buffer
@@ -299,49 +341,40 @@ def generate_gtts_audio(text, target_lang, gender):
         # Convert to base64
         audio_base64 = base64.b64encode(audio_buffer.read()).decode('utf-8')
         
+        print(f"✅ gTTS SUCCESS for {target_lang}")
         return f"data:audio/mp3;base64,{audio_base64}"
+        
     except Exception as e:
-        print(f"TTS error: {e}")
+        print(f"❌ gTTS error for {target_lang}: {e}")
         return None
 
 def translate_with_google_gender(text, source_lang, target_lang, speaker_gender):
     """Use Google Translate with gender context - FREE"""
     try:
+        print(f"🌐 Google Translate: '{text[:30]}...' {source_lang} → {target_lang}")
         translator = Translator()
         
-        # Add gender context to help Google understand
-        if target_lang in ['hi', 'ur', 'ne', 'pa'] and speaker_gender:
-            if speaker_gender == 'male':
-                context_text = f"A man says: {text}"
-            else:
-                context_text = f"A woman says: {text}"
-        else:
-            context_text = text
+        # Simple translation without complex context for reliability
+        result = translator.translate(text, src=source_lang, dest=target_lang)
         
-        result = translator.translate(
-            context_text, 
-            src=source_lang, 
-            dest=target_lang
-        )
-        
-        # Clean up the context from result
         translated = result.text
-        if "says:" in translated or "कहती है:" in translated or "कहता है:" in translated:
-            # Remove the context part
-            parts = translated.split(":")
-            if len(parts) > 1:
-                translated = ":".join(parts[1:]).strip()
+        print(f"✅ Google Translate result: '{translated[:50]}...'")
+        
+        # Apply gender adjustments only for specific languages
+        if target_lang in ['hi', 'ur', 'ne', 'pa']:
+            translated = adjust_grammatical_gender(translated, target_lang, speaker_gender)
         
         return translated
         
     except Exception as e:
-        print(f"Google Translate error: {e}")
-        return text
+        print(f"❌ Google Translate error: {e}")
+        raise e  # Re-raise to trigger fallback
 
 @app.route('/translate', methods=['POST'])
 def translate():
     try:
         data = request.get_json()
+        print(f"📨 Received request: {data}")
         
         if not data or 'text' not in data:
             return jsonify({"error": "No text provided"}), 400
@@ -356,25 +389,34 @@ def translate():
         speaker_gender = data.get('speaker_gender', 'female')
         voice_gender = data.get('voice_gender', 'female')
 
-        print(f"🚀 Fast translation: '{text[:30]}...' {source_lang}->{target_lang}")
-        print(f"👤 Speaker Gender: {speaker_gender} | 🔊 Voice Gender: {voice_gender}")
+        print(f"🚀 Processing: '{text}' | {source_lang} → {target_lang} | TTS: {tts_required}")
         
+        # Translate text
         translated_text = translate_text(text, source_lang, target_lang, speaker_gender)
+        
+        if not translated_text:
+            return jsonify({"error": "Translation failed"}), 500
+            
         cleanup_memory()
 
+        # Generate TTS for target language
         audio_url = None
-        if tts_required and translated_text and not translated_text.startswith("Translation failed"):
+        if tts_required:
+            print(f"🎵 Generating TTS for: '{translated_text}' in {target_lang}")
             audio_url = generate_tts_stream(translated_text, target_lang, voice_gender)
 
-        return jsonify({
+        response = {
             "translated_text": translated_text,
             "audio_url": audio_url,
             "source_lang": source_lang,
             "target_lang": target_lang
-        })
+        }
+        
+        print(f"✅ Response ready: {response}")
+        return jsonify(response)
         
     except Exception as e:
-        print(f"API error: {e}")
+        print(f"❌ API error: {e}")
         cleanup_memory()
         return jsonify({"error": str(e)}), 500
 

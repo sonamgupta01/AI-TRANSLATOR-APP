@@ -1,0 +1,20 @@
+
+flask
+flask-cors
+transformers
+torch
+gtts
+speechrecognition
+sentencepiece   #required for the M2M100 tokenizer.
+edge-tts
+googletrans==4.0.0rc1
+
+
+# flask - Web framework
+# flask-cors - CORS support for React frontend
+# transformers - For translation models (M2M100)
+# torch - Required by transformers
+# gtts - Google Text-to-Speech
+# speechrecognition - For speech-to-text functionality
+
+

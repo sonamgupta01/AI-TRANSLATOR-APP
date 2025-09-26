@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
-from transformers import M2M100ForConditionalGeneration, M2M100Tokenizer
+from flask_socketio import SocketIO, emit, join_room, leave_room
 from gtts import gTTS
 import io
 import base64
@@ -8,24 +8,40 @@ import torch
 import gc
 import asyncio
 import edge_tts
+import openai
+import os
 
 
 # Install: pip install googletrans==4.0.0rc1
 from googletrans import Translator
+from indic_transliteration import sanscript
+from indic_transliteration.sanscript import transliterate
 
 app = Flask(__name__)
 CORS(app)
+socketio = SocketIO(app, cors_allowed_origins="*")
 
-# Load translation model (this will download ~2GB on first run)
-model_name = "facebook/m2m100_418M"
-model = M2M100ForConditionalGeneration.from_pretrained(model_name)
-tokenizer = M2M100Tokenizer.from_pretrained(model_name)
+# Set OpenAI API key (you need to set this environment variable)
+openai.api_key = os.getenv('OPENAI_API_KEY')
 
-if torch.cuda.is_available():
-    print("CUDA available - using GPU")
-    model = model.to('cuda')
-else:
-    print("Using CPU - consider using smaller text chunks")
+# Load translation model lazily (this will download ~2GB on first run)
+model = None
+tokenizer = None
+
+def load_translation_model():
+    global model, tokenizer
+    if model is None:
+        print("Loading M2M100 model...")
+        from transformers import M2M100ForConditionalGeneration, M2M100Tokenizer
+        model_name = "facebook/m2m100_418M"
+        model = M2M100ForConditionalGeneration.from_pretrained(model_name)
+        tokenizer = M2M100Tokenizer.from_pretrained(model_name)
+
+        if torch.cuda.is_available():
+            print("CUDA available - using GPU")
+            model = model.to('cuda')
+        else:
+            print("Using CPU - consider using smaller text chunks")
 
 def cleanup_memory():
     """Clean up GPU/CPU memory"""
@@ -36,13 +52,13 @@ def cleanup_memory():
 def adjust_grammatical_gender(text, target_lang, speaker_gender):
     """Adjust translation based on speaker's gender for languages that need it"""
     
-    print(f"🔧 Adjusting grammar: {speaker_gender} speaker for {target_lang}")
+    print(f"Adjusting grammar: {speaker_gender} speaker for {target_lang}")
     
     # Languages that have grammatical gender differences
     gender_sensitive_langs = ['hi', 'ur', 'ne', 'bn', 'gu', 'mr', 'pa']
     
     if target_lang not in gender_sensitive_langs:
-        print(f"❌ {target_lang} doesn't need gender adjustment")
+        print(f"INFO: {target_lang} doesn't need gender adjustment")
         return text
     
     # Enhanced gender-based replacements for Hindi/Urdu
@@ -59,7 +75,7 @@ def adjust_grammatical_gender(text, target_lang, speaker_gender):
                 # Past tense
                 'गई': 'गया', 'आई': 'आया', 'की': 'किया'
             }
-            print(f"✅ Applied {len(replacements)} male grammar rules")
+            print(f"SUCCESS: Applied {len(replacements)} male grammar rules")
         else:  # female
             replacements = {
                 # Present continuous (रहा/रही)
@@ -72,14 +88,14 @@ def adjust_grammatical_gender(text, target_lang, speaker_gender):
                 # Past tense
                 'गया': 'गई', 'आया': 'आई', 'किया': 'की'
             }
-            print(f"✅ Applied {len(replacements)} female grammar rules")
+            print(f"SUCCESS: Applied {len(replacements)} female grammar rules")
         
         original_text = text
         for old, new in replacements.items():
             text = text.replace(old, new)
         
         if text != original_text:
-            print(f"🔄 Grammar changed: '{original_text}' → '{text}'")
+            print(f"INFO: Grammar changed: '{original_text}' -> '{text}'")
     
     # Enhanced Punjabi gender rules
     elif target_lang == 'pa':
@@ -127,6 +143,138 @@ def adjust_grammatical_gender(text, target_lang, speaker_gender):
     
     return text
 
+def get_ai_explanation(message, skill_topic, user_role):
+    """Get AI explanation for teaching context"""
+    try:
+        prompt = f"""
+        You are an AI mediator in a peer teaching session. One user is teaching {skill_topic} to another.
+        The {user_role} just said: "{message}"
+
+        Provide a helpful explanation or mediation that:
+        - Clarifies any confusion
+        - Suggests next steps for teaching/learning
+        - Translates complex concepts into simpler terms
+        - Encourages effective communication
+
+        Keep your response concise (2-3 sentences) and supportive.
+        """
+
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=150,
+            temperature=0.7
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"AI explanation error: {e}")
+        return None
+
+@socketio.on('join_room')
+def handle_join_room(data):
+    room = data['room']
+    username = data['username']
+    join_room(room)
+    emit('user_joined', {'username': username}, room=room)
+
+@socketio.on('send_message')
+def handle_send_message(data):
+    room = data['room']
+    message = data['message']
+    username = data['username']
+    user_lang = data.get('user_lang', 'en')
+    target_lang = data.get('target_lang', 'en')
+    skill_topic = data.get('skill_topic', 'general')
+    user_role = data.get('user_role', 'learner')
+
+    # Translate message if languages are different
+    translated_message = message
+    if user_lang != target_lang:
+        try:
+            translated_message = translate_text(message, user_lang, target_lang)
+        except Exception as e:
+            print(f"Translation failed for chat: {e}")
+
+    emit('receive_message', {
+        'username': username,
+        'message': message,
+        'translated_message': translated_message,
+        'original_lang': user_lang,
+        'target_lang': target_lang,
+        'timestamp': data.get('timestamp')
+    }, room=room)
+
+    # Get AI explanation (disabled due to quota limits)
+    # try:
+    #     ai_explanation = get_ai_explanation(message, skill_topic, user_role)
+    #     if ai_explanation:
+    #         emit('ai_message', {
+    #             'message': ai_explanation,
+    #             'type': 'explanation'
+    #         }, room=room)
+    # except Exception as e:
+    #     print(f"AI explanation skipped: {e}")
+    pass  # AI explanations disabled due to quota
+
+@socketio.on('request_explanation')
+def handle_request_explanation(data):
+    room = data['room']
+    topic = data['topic']
+    context = data['context']
+
+    prompt = f"Explain {topic} in simple terms. Context: {context}"
+
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=200
+        )
+        explanation = response.choices[0].message.content.strip()
+        emit('ai_message', {
+            'message': explanation,
+            'type': 'explanation'
+        }, room=room)
+    except Exception as e:
+        print(f"AI explanation error: {e}")
+
+def romanize_text(text, target_lang):
+    """Romanize text for pronunciation help"""
+    try:
+        # Languages that support romanization
+        romanizable_langs = {
+            'hi': 'devanagari',
+            'bn': 'bengali',
+            'te': 'telugu',
+            'ta': 'tamil',
+            'ml': 'malayalam',
+            'gu': 'gujarati',
+            'kn': 'kannada',
+            'mr': 'devanagari',
+            'pa': 'gurmukhi',
+            'ur': 'urdu',
+            'ne': 'devanagari',
+            'or': 'oriya',
+            'as': 'assamese',
+            'mai': 'devanagari',
+            'bho': 'devanagari',
+            'awa': 'devanagari',
+            'mag': 'devanagari',
+            'hne': 'devanagari',
+            'doi': 'devanagari'
+        }
+
+        if target_lang not in romanizable_langs:
+            return None
+
+        script = romanizable_langs[target_lang]
+        romanized = transliterate(text, script, sanscript.ITRANS)
+        return romanized
+
+    except Exception as e:
+        print(f"ERROR: Romanization failed for {target_lang}: {e}")
+        return None
+
 def translate_text(text, source_lang, target_lang, speaker_gender='female'):
     """Translate text with gender context"""
     try:
@@ -134,21 +282,50 @@ def translate_text(text, source_lang, target_lang, speaker_gender='female'):
         translator = Translator()
         result = translator.translate(text, src=source_lang, dest=target_lang)
         translated = result.text
-        
+
         # Apply gender adjustments only for specific languages
         if target_lang in ['hi', 'ur', 'ne', 'pa']:
             translated = adjust_grammatical_gender(translated, target_lang, speaker_gender)
-        
+
         return translated
-        
+
     except Exception as e:
-        print(f"❌ Google Translate failed: {e}")
-        # Fallback to M2M100
-        return translate_single_chunk(text, source_lang, target_lang, speaker_gender)
+        print(f"ERROR: Google Translate failed: {e}")
+        # Try a simple fallback translation using basic mappings for common cases
+        if source_lang == 'en' and target_lang == 'hi':
+            # Very basic English to Hindi fallback
+            basic_translations = {
+                'hello': 'नमस्ते',
+                'thank you': 'धन्यवाद',
+                'please': 'कृपया',
+                'yes': 'हाँ',
+                'no': 'नहीं',
+                'good': 'अच्छा',
+                'bad': 'खराब',
+                'how are you': 'आप कैसे हैं',
+                'i am fine': 'मैं ठीक हूँ',
+                'what': 'क्या',
+                'where': 'कहाँ',
+                'when': 'कब',
+                'why': 'क्यों',
+                'how': 'कैसे'
+            }
+            lower_text = text.lower().strip()
+            if lower_text in basic_translations:
+                return basic_translations[lower_text]
+            else:
+                # Return original text marked as untranslated
+                return f"[Translation unavailable] {text}"
+
+        # For other language pairs, return original text
+        return f"[Translation unavailable] {text}"
 
 def translate_single_chunk(text, source_lang, target_lang, speaker_gender='female'):
     """Translate a single chunk of text with optimized speed"""
     try:
+        # Load model if not loaded
+        load_translation_model()
+
         lang_codes = {
             'en': 'en', 'es': 'es', 'fr': 'fr', 'de': 'de', 'it': 'it', 'pt': 'pt',
             'ru': 'ru', 'ja': 'ja', 'ko': 'ko', 'zh': 'zh', 'ar': 'ar', 'tr': 'tr',
@@ -186,7 +363,7 @@ def translate_single_chunk(text, source_lang, target_lang, speaker_gender='femal
         translated = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)[0]
         translated = adjust_grammatical_gender(translated, target_lang, speaker_gender)
         
-        print(f"✓ Translated: '{translated[:30]}...'")
+        print(f"SUCCESS: Translated: '{translated[:30]}...'")
         return translated
         
     except Exception as e:
@@ -196,7 +373,7 @@ def translate_single_chunk(text, source_lang, target_lang, speaker_gender='femal
 async def generate_edge_tts(text, target_lang, gender):
     """Generate TTS using Microsoft Edge TTS with proper male/female voices"""
     try:
-        print(f"🎯 Edge TTS called: lang={target_lang}, gender={gender}, text='{text[:30]}...'")
+        print(f"INFO: Edge TTS called: lang={target_lang}, gender={gender}")
         
         # COMPREHENSIVE Voice mapping for ALL languages
         voice_map = {
@@ -231,7 +408,7 @@ async def generate_edge_tts(text, target_lang, gender):
         # Get voice for language and gender
         voice = voice_map.get(target_lang, {}).get(gender, 'en-US-JennyNeural')
         
-        print(f"🎤 Using Edge TTS voice: {voice} for {target_lang}-{gender}")
+        print(f"INFO: Using Edge TTS voice for {target_lang}-{gender}")
         
         # Generate speech
         communicate = edge_tts.Communicate(text, voice)
@@ -243,23 +420,23 @@ async def generate_edge_tts(text, target_lang, gender):
                 audio_data += chunk["data"]
         
         if not audio_data:
-            print("❌ No audio data received from Edge TTS")
+            print("ERROR: No audio data received from Edge TTS")
             return None
         
-        print(f"✅ Edge TTS success: {len(audio_data)} bytes for {target_lang}")
+        print(f"SUCCESS: Edge TTS generated {len(audio_data)} bytes")
         
         # Convert to base64
         audio_base64 = base64.b64encode(audio_data).decode('utf-8')
         return f"data:audio/mp3;base64,{audio_base64}"
         
     except Exception as e:
-        print(f"❌ Edge TTS error for {target_lang}: {e}")
+        print(f"ERROR: Edge TTS error for {target_lang}: {e}")
         return None
 
 def generate_tts_stream(text, target_lang, gender='female'):
     """Generate TTS with proper error handling"""
     try:
-        print(f"🔊 TTS Request: lang={target_lang}, gender={gender}, text='{text[:30]}...'")
+        print(f"INFO: TTS Request: lang={target_lang}, gender={gender}")
         
         # Try Edge TTS first
         try:
@@ -273,24 +450,24 @@ def generate_tts_stream(text, target_lang, gender='female'):
             result = loop.run_until_complete(generate_edge_tts(text, target_lang, gender))
             
             if result:
-                print(f"✅ Edge TTS SUCCESS for {target_lang}")
+                print(f"SUCCESS: Edge TTS SUCCESS")
                 return result
                 
         except Exception as e:
-            print(f"⚠️ Edge TTS failed: {e}")
+            print(f"WARNING: Edge TTS failed: {e}")
         
         # Always fallback to gTTS
-        print(f"🔄 Using gTTS fallback for {target_lang}")
+        print(f"INFO: Using gTTS fallback for {target_lang}")
         return generate_gtts_audio(text, target_lang, gender)
             
     except Exception as e:
-        print(f"❌ All TTS failed for {target_lang}: {e}")
+        print(f"ERROR: All TTS failed for {target_lang}: {e}")
         return None
 
 def generate_gtts_audio(text, target_lang, gender):
     """Generate TTS audio with gTTS - FIXED for all languages"""
     try:
-        print(f"🎵 gTTS generating for {target_lang}: '{text[:30]}...'")
+        print(f"INFO: gTTS generating for {target_lang}: '{text[:30]}...'")
         
         # Enhanced TLD mapping for better voices
         tld_map = {
@@ -325,7 +502,7 @@ def generate_gtts_audio(text, target_lang, gender):
         # Get appropriate TLD for gender
         tld = tld_map.get(target_lang, {}).get(gender, 'com')
         
-        print(f"🎤 gTTS: {target_lang} with {gender} voice (TLD: {tld})")
+        print(f"INFO: gTTS: {target_lang} with {gender} voice")
         
         # Create TTS with gender-specific settings
         if gender == 'male':
@@ -341,24 +518,24 @@ def generate_gtts_audio(text, target_lang, gender):
         # Convert to base64
         audio_base64 = base64.b64encode(audio_buffer.read()).decode('utf-8')
         
-        print(f"✅ gTTS SUCCESS for {target_lang}")
+        print(f"SUCCESS: gTTS SUCCESS for {target_lang}")
         return f"data:audio/mp3;base64,{audio_base64}"
         
     except Exception as e:
-        print(f"❌ gTTS error for {target_lang}: {e}")
+        print(f"ERROR: gTTS error for {target_lang}: {e}")
         return None
 
 def translate_with_google_gender(text, source_lang, target_lang, speaker_gender):
     """Use Google Translate with gender context - FREE"""
     try:
-        print(f"🌐 Google Translate: '{text[:30]}...' {source_lang} → {target_lang}")
+        print(f"INFO: Google Translate: '{text[:30]}...' {source_lang} -> {target_lang}")
         translator = Translator()
         
         # Simple translation without complex context for reliability
         result = translator.translate(text, src=source_lang, dest=target_lang)
         
         translated = result.text
-        print(f"✅ Google Translate result: '{translated[:50]}...'")
+        print(f"SUCCESS: Google Translate result: '{translated[:50]}...'")
         
         # Apply gender adjustments only for specific languages
         if target_lang in ['hi', 'ur', 'ne', 'pa']:
@@ -367,14 +544,14 @@ def translate_with_google_gender(text, source_lang, target_lang, speaker_gender)
         return translated
         
     except Exception as e:
-        print(f"❌ Google Translate error: {e}")
+        print(f"ERROR: Google Translate error: {e}")
         raise e  # Re-raise to trigger fallback
 
 @app.route('/translate', methods=['POST'])
 def translate():
     try:
         data = request.get_json()
-        print(f"📨 Received request: {data}")
+        print(f"INFO: Received request: {data}")
         
         if not data or 'text' not in data:
             return jsonify({"error": "No text provided"}), 400
@@ -389,38 +566,55 @@ def translate():
         speaker_gender = data.get('speaker_gender', 'female')
         voice_gender = data.get('voice_gender', 'female')
 
-        print(f"🚀 Processing: '{text}' | {source_lang} → {target_lang} | TTS: {tts_required}")
+        print(f"INFO: Processing: '{text}' | {source_lang} -> {target_lang} | TTS: {tts_required}")
         
         # Translate text
         translated_text = translate_text(text, source_lang, target_lang, speaker_gender)
-        
+
         if not translated_text:
             return jsonify({"error": "Translation failed"}), 500
-            
+
         cleanup_memory()
+
+        # Generate romanized text for pronunciation help
+        romanized_text = None
+        try:
+            romanized_text = romanize_text(translated_text, target_lang)
+        except Exception as e:
+            print(f"WARNING: Romanization failed: {e}")
 
         # Generate TTS for target language
         audio_url = None
         if tts_required:
-            print(f"🎵 Generating TTS for: '{translated_text}' in {target_lang}")
-            audio_url = generate_tts_stream(translated_text, target_lang, voice_gender)
+            try:
+                print(f"INFO: Generating TTS for text in {target_lang} with {voice_gender} voice")
+                audio_url = generate_tts_stream(translated_text, target_lang, voice_gender)
+                if audio_url:
+                    print(f"SUCCESS: TTS generated, URL length: {len(audio_url)}")
+                else:
+                    print(f"WARNING: TTS returned None")
+            except Exception as e:
+                print(f"ERROR: TTS generation failed: {e}")
+                import traceback
+                traceback.print_exc()
 
         response = {
             "translated_text": translated_text,
+            "romanized_text": romanized_text,
             "audio_url": audio_url,
             "source_lang": source_lang,
             "target_lang": target_lang
         }
         
-        print(f"✅ Response ready: {response}")
+        print(f"SUCCESS: Response ready (translated_text length: {len(response.get('translated_text', ''))})")
         return jsonify(response)
         
     except Exception as e:
-        print(f"❌ API error: {e}")
+        print(f"ERROR: API error occurred")
         cleanup_memory()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Translation service temporarily unavailable"}), 500
 
 if __name__ == '__main__':
-    print("🚀 Flask server starting on http://localhost:5000")
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    print("Flask-SocketIO server starting on http://localhost:5000")
+    socketio.run(app, debug=True, host='0.0.0.0', port=5000)
 

@@ -319,10 +319,110 @@ body {
 .mt-sm { margin-top: var(--spacing-sm); }
 .mt-md { margin-top: var(--spacing-md); }
 .mt-lg { margin-top: var(--spacing-lg); }
-
 .translation-output .section-title {
   color: #000000 !important;
 }
+
+/* Teaching Setup Styles */
+.teaching-setup {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-lg);
+  margin-bottom: var(--spacing-lg);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.teaching-setup h2 {
+  color: var(--text-light);
+  margin-bottom: var(--spacing-md);
+  text-align: center;
+}
+
+.session-info {
+  text-align: center;
+  color: var(--text-light);
+  font-weight: 500;
+  padding: var(--spacing-sm);
+  background: rgba(0, 255, 0, 0.1);
+  border-radius: var(--radius-sm);
+}
+
+/* Chat Styles */
+.chat-section {
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-lg);
+  margin-bottom: var(--spacing-lg);
+  box-shadow: var(--shadow-md);
+}
+
+.chat-section h3 {
+  color: #000000;
+  margin-bottom: var(--spacing-md);
+  text-align: center;
+}
+
+.chat-messages {
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid #ddd;
+  border-radius: var(--radius-sm);
+  padding: var(--spacing-sm);
+  margin-bottom: var(--spacing-md);
+  background: #fafafa;
+}
+
+.chat-message {
+  margin-bottom: var(--spacing-sm);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border-radius: var(--radius-sm);
+}
+
+.chat-message.user {
+  background: #e3f2fd;
+  border-left: 3px solid #2196f3;
+}
+
+.chat-message.ai {
+  background: #f3e5f5;
+  border-left: 3px solid #9c27b0;
+  font-style: italic;
+}
+
+.chat-message.system {
+  background: #fff3e0;
+  border-left: 3px solid #ff9800;
+  text-align: center;
+  font-size: 0.9rem;
+}
+
+.chat-input-row {
+  display: flex;
+  gap: var(--spacing-sm);
+}
+
+.chat-input-row .text-input {
+  flex: 1;
+  min-height: 40px;
+  margin: 0;
+}
+
+.chat-input-row .btn {
+  flex-shrink: 0;
+  padding: var(--spacing-sm) var(--spacing-md);
+}
+
+/* Responsive for chat */
+@media (max-width: 768px) {
+  .chat-input-row {
+    flex-direction: column;
+  }
+
+  .chat-input-row .btn {
+    width: 100%;
+  }
+}
+
 
 
 

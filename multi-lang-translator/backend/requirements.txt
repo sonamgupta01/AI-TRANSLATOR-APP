@@ -1,6 +1,8 @@
 
 flask
 flask-cors
+flask-socketio
+python-socketio
 transformers
 torch
 gtts
@@ -8,6 +10,8 @@ speechrecognition
 sentencepiece   #required for the M2M100 tokenizer.
 edge-tts
 googletrans==4.0.0rc1
+indic-transliteration
+openai
 
 
 # flask - Web framework

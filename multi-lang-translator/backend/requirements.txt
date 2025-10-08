@@ -9,7 +9,7 @@ gtts
 speechrecognition
 sentencepiece   #required for the M2M100 tokenizer.
 edge-tts
-googletrans==4.0.0rc1
+googletrans-py
 indic-transliteration
 openai
 

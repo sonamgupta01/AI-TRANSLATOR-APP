@@ -111,3 +111,12 @@ To create a free, reliable translation tool that works across multiple languages
 
 This demonstrates effective combination of free AI tools for practical language translation.
 ````
+
+// To run
+// cd multi-lang-translator
+// cd backend
+//backend_env/Scripts/activate    
+// python app.py
+
+// cd frontend
+// npm run dev
